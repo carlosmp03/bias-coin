@@ -1,67 +1,53 @@
-# bias-coin-bot
+# bias-coin-bot v2
 
-Минимальный Telegram-бот с намеренно смещённой монеткой:
+Личный Telegram-диспетчер для работы и теории вероятностей.
 
-- `80%` — `ACTION`
-- `20%` — `PAUSE`
-- `/done` — начисляет `+1 Action Token`
-- данные хранятся в SQLite
+## Механика
 
-## Структура
+- `/study` выбирает одну нерешённую задачу.
+- Фокус-блок: 10 / 25 / 45 / 60 минут.
+- После блока бот сам пишет.
+- Если ты не отвечаешь, бот напоминает снова и постепенно уменьшает требование до 10 минут.
+- `/stuck` требует зафиксировать попытку текстом.
+- Утром бот просит план дня; вечером присылает контрольный итог.
+- `/flip` остаётся: 80% ACTION / 20% PAUSE.
+
+## Railway
+
+Variables:
 
 ```text
-bias-coin-bot/
-├── bot.py
-├── requirements.txt
-├── .env.example
-├── .gitignore
-└── README.md
+TELEGRAM_BOT_TOKEN=...
+DEFAULT_TIMEZONE=Europe/Moscow
+DEFAULT_MORNING_TIME=09:30
+DEFAULT_EVENING_TIME=22:30
+DB_PATH=/data/bot.db
 ```
 
-`bot.db` создаётся автоматически при первом запуске.
+Добавь Railway Volume с mount path:
 
-## Запуск
-
-### 1. Создать виртуальное окружение
-
-Windows:
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate
+```text
+/data
 ```
 
-macOS / Linux:
+Это важно: иначе SQLite может исчезнуть после redeploy.
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
+Start Command:
 
-### 2. Установить зависимости
-
-```bash
-pip install -r requirements.txt
-```
-
-### 3. Создать `.env`
-
-Скопировать `.env.example` в `.env`:
-
-```env
-TELEGRAM_BOT_TOKEN=твой_токен_от_BotFather
-```
-
-### 4. Запустить
-
-```bash
+```text
 python bot.py
 ```
 
-## Команды
+После деплоя в Telegram выполни:
 
-- `/start` — описание бота
-- `/flip` — бросок: 80% ACTION / 20% PAUSE
-- `/done` — +1 Action Token
-- `/balance` — текущий баланс
-- `/stats` — статистика бросков и выполненных действий
+```text
+/timezone Europe/Moscow
+/schedule 09:30 22:30
+/start
+```
+
+Потом тест:
+
+```text
+/study
+```

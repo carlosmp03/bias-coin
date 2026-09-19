@@ -1,205 +1,76 @@
-import os
-import random
-import sqlite3
-from pathlib import Path
+from telegram import BotCommand
+from telegram.ext import (
+    Application, CallbackQueryHandler, CommandHandler,
+    MessageHandler, filters,
+)
+import database as db
+from config import BOT_TOKEN
+from handlers.coin import flip
+from handlers.common import start, status, stats, balance
+from handlers.planning import conversation, today, schedule, timezone_cmd
+from handlers.study import (
+    study, study_button, focus, task, tasks, done, checkin,
+    continue_focus, pause_button, pause_cmd, stuck, attempt_text,
+    skip, reopen,
+)
+from scheduler import watchdog
 
-from dotenv import load_dotenv
-from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+async def post_init(app):
+    await app.bot.set_my_commands([
+        BotCommand("study", "начать учебный блок"),
+        BotCommand("task", "текущая задача"),
+        BotCommand("tasks", "прогресс по листку"),
+        BotCommand("done", "закрыть текущую задачу"),
+        BotCommand("stuck", "зафиксировать тупик"),
+        BotCommand("pause", "пауза, например /pause 15"),
+        BotCommand("plan", "план дня"),
+        BotCommand("today", "план на сегодня"),
+        BotCommand("status", "текущее состояние"),
+        BotCommand("stats", "статистика"),
+        BotCommand("flip", "монетка 80/20"),
+        BotCommand("balance", "Action Tokens"),
+        BotCommand("schedule", "утро и вечер"),
+        BotCommand("timezone", "часовой пояс"),
+    ])
+    if app.job_queue is None:
+        raise RuntimeError("Нужен python-telegram-bot[job-queue].")
+    app.job_queue.run_repeating(watchdog, interval=30, first=5)
 
-BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "bot.db"
-
-load_dotenv(BASE_DIR / ".env")
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
-
-def get_connection() -> sqlite3.Connection:
-    connection = sqlite3.connect(DB_PATH)
-    connection.row_factory = sqlite3.Row
-    return connection
-
-
-def init_db() -> None:
-    with get_connection() as conn:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                action_tokens INTEGER NOT NULL DEFAULT 0,
-                flips_total INTEGER NOT NULL DEFAULT 0,
-                action_flips INTEGER NOT NULL DEFAULT 0,
-                pause_flips INTEGER NOT NULL DEFAULT 0,
-                done_count INTEGER NOT NULL DEFAULT 0
-            )
-            """
-        )
-        conn.commit()
-
-
-def ensure_user(user_id: int) -> None:
-    with get_connection() as conn:
-        conn.execute(
-            """
-            INSERT OR IGNORE INTO users (user_id)
-            VALUES (?)
-            """,
-            (user_id,),
-        )
-        conn.commit()
-
-
-def get_user_stats(user_id: int) -> sqlite3.Row:
-    ensure_user(user_id)
-
-    with get_connection() as conn:
-        row = conn.execute(
-            """
-            SELECT *
-            FROM users
-            WHERE user_id = ?
-            """,
-            (user_id,),
-        ).fetchone()
-
-    return row
-
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
-    ensure_user(user_id)
-
-    text = (
-        "🪙 Bias Coin Bot\n\n"
-        "Монетка специально смещена в сторону действия:\n"
-        "80% — ACTION\n"
-        "20% — PAUSE\n\n"
-        "Команды:\n"
-        "/flip — бросить монетку\n"
-        "/done — отметить выполненное действие и получить +1 Action Token\n"
-        "/balance — баланс Action Tokens\n"
-        "/stats — статистика"
-    )
-
-    await update.message.reply_text(text)
-
-
-async def flip(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
-    ensure_user(user_id)
-
-    is_action = random.random() < 0.8
-
-    with get_connection() as conn:
-        if is_action:
-            conn.execute(
-                """
-                UPDATE users
-                SET flips_total = flips_total + 1,
-                    action_flips = action_flips + 1
-                WHERE user_id = ?
-                """,
-                (user_id,),
-            )
-        else:
-            conn.execute(
-                """
-                UPDATE users
-                SET flips_total = flips_total + 1,
-                    pause_flips = pause_flips + 1
-                WHERE user_id = ?
-                """,
-                (user_id,),
-            )
-        conn.commit()
-
-    if is_action:
-        await update.message.reply_text("⚡ ACTION")
-    else:
-        await update.message.reply_text("☕ PAUSE")
-
-
-async def done(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
-    ensure_user(user_id)
-
-    with get_connection() as conn:
-        conn.execute(
-            """
-            UPDATE users
-            SET action_tokens = action_tokens + 1,
-                done_count = done_count + 1
-            WHERE user_id = ?
-            """,
-            (user_id,),
-        )
-        conn.commit()
-
-    stats = get_user_stats(user_id)
-
-    await update.message.reply_text(
-        f"✅ Засчитано.\n"
-        f"+1 Action Token\n"
-        f"Баланс: {stats['action_tokens']}"
-    )
-
-
-async def balance(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
-    stats = get_user_stats(user_id)
-
-    await update.message.reply_text(
-        f"🪙 Action Tokens: {stats['action_tokens']}"
-    )
-
-
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    user_id = update.effective_user.id
-    stats = get_user_stats(user_id)
-
-    flips_total = stats["flips_total"]
-    action_flips = stats["action_flips"]
-    pause_flips = stats["pause_flips"]
-
-    if flips_total > 0:
-        action_rate = action_flips / flips_total * 100
-        pause_rate = pause_flips / flips_total * 100
-    else:
-        action_rate = 0.0
-        pause_rate = 0.0
-
-    text = (
-        "📊 Stats\n\n"
-        f"Flips: {flips_total}\n"
-        f"ACTION: {action_flips} ({action_rate:.1f}%)\n"
-        f"PAUSE: {pause_flips} ({pause_rate:.1f}%)\n"
-        f"Done: {stats['done_count']}\n"
-        f"Action Tokens: {stats['action_tokens']}"
-    )
-
-    await update.message.reply_text(text)
-
-
-def main() -> None:
+def main():
     if not BOT_TOKEN:
-        raise RuntimeError(
-            "TELEGRAM_BOT_TOKEN is not set. "
-            "Create a .env file from .env.example."
-        )
+        raise RuntimeError("TELEGRAM_BOT_TOKEN is not set.")
+    db.init_db()
 
-    init_db()
+    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
 
-    app = Application.builder().token(BOT_TOKEN).build()
-
+    app.add_handler(conversation())
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("flip", flip))
+    app.add_handler(CommandHandler("study", study))
+    app.add_handler(CommandHandler("task", task))
+    app.add_handler(CommandHandler("tasks", tasks))
     app.add_handler(CommandHandler("done", done))
-    app.add_handler(CommandHandler("balance", balance))
+    app.add_handler(CommandHandler("stuck", stuck))
+    app.add_handler(CommandHandler("pause", pause_cmd))
+    app.add_handler(CommandHandler("skip", skip))
+    app.add_handler(CommandHandler("reopen", reopen))
+    app.add_handler(CommandHandler("today", today))
+    app.add_handler(CommandHandler("status", status))
     app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("balance", balance))
+    app.add_handler(CommandHandler("flip", flip))
+    app.add_handler(CommandHandler("schedule", schedule))
+    app.add_handler(CommandHandler("timezone", timezone_cmd))
 
-    print("Bias Coin Bot is running...")
-    app.run_polling()
+    app.add_handler(CallbackQueryHandler(study_button, pattern=r"^study:start$"))
+    app.add_handler(CallbackQueryHandler(focus, pattern=r"^focus:\d+$"))
+    app.add_handler(CallbackQueryHandler(checkin, pattern=r"^checkin:"))
+    app.add_handler(CallbackQueryHandler(continue_focus, pattern=r"^continue:\d+$"))
+    app.add_handler(CallbackQueryHandler(pause_button, pattern=r"^pause:\d+$"))
 
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, attempt_text))
+
+    print("Bias Coin Bot v2 is running...")
+    app.run_polling(drop_pending_updates=False)
 
 if __name__ == "__main__":
     main()
