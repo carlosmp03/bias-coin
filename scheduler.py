@@ -1,133 +1,183 @@
 from datetime import datetime, timedelta, timezone
-from telegram.ext import ContextTypes
-import database as db
-from config import QUIET_END, QUIET_START, REMINDER_DELAYS_MIN
-from keyboards import checkin_keyboard, minimum_keyboard, morning_keyboard
-from utils import is_after_hhmm, is_quiet_time, local_now
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-def dt(value):
+from telegram.ext import ContextTypes
+
+import database as db
+from config import MORNING_TIME, NAG_DELAYS_MIN
+from keyboards import checkin_keyboard, nag_keyboard, proposed_keyboard
+
+
+def now_utc():
+    return datetime.now(timezone.utc)
+
+
+def parse_iso(value):
     return datetime.fromisoformat(value)
 
-async def send(context, chat_id, text, **kwargs):
+
+def zone(name):
+    try:
+        return ZoneInfo(name)
+    except ZoneInfoNotFoundError:
+        return ZoneInfo("UTC")
+
+
+def hhmm_after(now_local, hhmm):
+    h, m = map(int, hhmm.split(":"))
+    target = now_local.replace(hour=h, minute=m, second=0, microsecond=0)
+    return now_local >= target
+
+
+def quiet(now_local, start_text, end_text):
+    sh, sm = map(int, start_text.split(":"))
+    eh, em = map(int, end_text.split(":"))
+    current = now_local.hour * 60 + now_local.minute
+    start = sh * 60 + sm
+    end = eh * 60 + em
+    if start < end:
+        return start <= current < end
+    return current >= start or current < end
+
+
+async def safe_send(context, chat_id, text, **kwargs):
     try:
         await context.bot.send_message(chat_id=chat_id, text=text, **kwargs)
         return True
-    except Exception as e:
-        print(f"send failed chat={chat_id}: {e}")
+    except Exception as exc:
+        print(f"send failed chat={chat_id}: {exc}")
         return False
 
-async def check_sessions(context):
-    now = datetime.now(timezone.utc)
-    for s in db.active_sessions():
-        if is_quiet_time(local_now(s["timezone"]), QUIET_START, QUIET_END):
+
+async def process_reminders(context):
+    now = now_utc()
+    for r in db.due_reminders(now.isoformat()):
+        local = now.astimezone(zone(r["timezone"]))
+        if quiet(local, r["quiet_start"], r["quiet_end"]):
             continue
 
-        if s["status"] == "working" and dt(s["due_at"]) <= now:
-            if await send(
-                context, s["chat_id"],
-                f"⏰ Блок по задаче {s['task_no']} закончился.\n\nЧто реально произошло?",
-                reply_markup=checkin_keyboard()
-            ):
-                db.session_waiting(
-                    s["id"],
-                    (now+timedelta(minutes=REMINDER_DELAYS_MIN[0])).isoformat(),
-                    0
+        text = r["commitment_text"] or "то, что ты собирался сделать"
+        ok = await safe_send(
+            context,
+            r["chat_id"],
+            f"⏰ Время. Ты собирался: {text}\n\nНачал?",
+            reply_markup=proposed_keyboard(),
+        )
+        if ok:
+            db.mark_reminder_sent(r["id"])
+            db.log_event(r["user_id"], "assistant", "reminder",
+                         f"Напомнил начать: {text}")
+
+
+async def process_sessions(context):
+    now = now_utc()
+
+    for s in db.all_active_sessions():
+        local = now.astimezone(zone(s["timezone"]))
+        if quiet(local, s["quiet_start"], s["quiet_end"]):
+            continue
+
+        if s["status"] == "working" and parse_iso(s["due_at"]) <= now:
+            ok = await safe_send(
+                context,
+                s["chat_id"],
+                f"⏰ Блок закончился.\n\n"
+                f"Ты собирался: {s['commitment_text']}\n\nЧто по факту?",
+                reply_markup=checkin_keyboard(),
+            )
+            if ok:
+                next_ping = now + timedelta(minutes=NAG_DELAYS_MIN[0])
+                db.set_session_waiting(
+                    s["id"], next_ping.isoformat(), nag_stage=0
                 )
-            continue
-
-        if s["status"] == "snoozed":
-            if s["next_ping_at"] and dt(s["next_ping_at"]) <= now:
-                if await send(
-                    context, s["chat_id"],
-                    f"☕ Пауза закончилась. Задача {s['task_no']} никуда не делась.\n\n"
-                    "Нужны только первые 10 минут.",
-                    reply_markup=minimum_keyboard()
-                ):
-                    db.session_waiting(
-                        s["id"],
-                        (now+timedelta(minutes=REMINDER_DELAYS_MIN[0])).isoformat(),
-                        0
-                    )
+                db.log_event(
+                    s["user_id"], "assistant", "checkin",
+                    f"Спросил результат: {s['commitment_text']}"
+                )
             continue
 
         if s["status"] != "waiting":
             continue
-        if not s["next_ping_at"] or dt(s["next_ping_at"]) > now:
+        if not s["next_ping_at"] or parse_iso(s["next_ping_at"]) > now:
             continue
 
-        stage = int(s["reminder_stage"])
+        stage = int(s["nag_stage"])
         if stage == 0:
             text = (
-                f"👀 Ты не ответил по задаче {s['task_no']}.\n\n"
-                "Мне нужен статус, а не идеальный результат."
+                f"👀 Ты пропал. «{s['commitment_text']}» всё ещё висит.\n\n"
+                "Сделал, делаешь или опять откладываем?"
             )
-            kb = checkin_keyboard()
         elif stage == 1:
             text = (
-                f"⚠️ Задача {s['task_no']} всё ещё висит.\n\n"
-                "Выбери действие сейчас."
+                f"Так, возвращаю тебя сюда.\n\n"
+                f"«{s['commitment_text']}».\n"
+                "Не нужен идеальный настрой. Нужны 10 минут."
             )
-            kb = minimum_keyboard()
         elif stage == 2:
             text = (
-                f"🧱 Уменьшаю требование: задача {s['task_no']}, "
-                "10 минут без переключений."
+                f"⚡ Минимальный контракт: 10 минут на "
+                f"«{s['commitment_text']}» прямо сейчас."
             )
-            kb = minimum_keyboard()
         else:
             text = (
-                f"🔁 Возвращаю задачу {s['task_no']}.\n\n"
-                "10 минут, /stuck или /done."
-            )
-            kb = minimum_keyboard()
-
-        if await send(context, s["chat_id"], text, reply_markup=kb):
-            new_stage = min(stage+1, 3)
-            delay = REMINDER_DELAYS_MIN[min(new_stage, len(REMINDER_DELAYS_MIN)-1)]
-            db.advance_reminder(
-                s["id"], new_stage, (now+timedelta(minutes=delay)).isoformat()
+                f"🔁 Я всё ещё помню про «{s['commitment_text']}».\n\n"
+                "Либо делаем 10 минут, либо честно отменяем."
             )
 
-async def check_daily(context):
-    for u in db.users():
-        uid, chat_id = u["user_id"], u["chat_id"]
-        now_local = local_now(u["timezone"])
-        date = now_local.date().isoformat()
+        ok = await safe_send(
+            context, s["chat_id"], text, reply_markup=nag_keyboard()
+        )
+        if ok:
+            new_stage = min(stage + 1, 3)
+            delay = NAG_DELAYS_MIN[min(
+                new_stage, len(NAG_DELAYS_MIN) - 1
+            )]
+            db.advance_nag(
+                s["id"], new_stage,
+                (now + timedelta(minutes=delay)).isoformat()
+            )
+            db.log_event(
+                s["user_id"], "assistant", "nag",
+                f"Напоминание stage={new_stage}: {s['commitment_text']}"
+            )
 
-        if is_after_hhmm(now_local, u["morning_time"]) and \
-           not db.notification_sent(uid, date, "morning"):
-            p = db.plan(uid, date)
-            if p:
-                text = (
-                    "🌅 План уже есть:\n\n"
-                    f"1. {p['main_goal']}\n"
-                    f"2. {p['secondary_goal']}\n"
-                    f"📚 {p['study_goal']}\n\n"
-                    "Не перепланируем. Начинаем."
-                )
-            else:
-                text = (
-                    "🌅 Доброе утро. До начала хаоса зафиксируем день.\n\n"
-                    "Одно главное дело, одно второстепенное и одна учебная цель."
-                )
-            if await send(context, chat_id, text, reply_markup=morning_keyboard()):
-                db.mark_notification(uid, date, "morning")
 
-        if is_after_hhmm(now_local, u["evening_time"]) and \
-           not db.notification_sent(uid, date, "evening"):
-            s = db.stats(uid)
-            t = db.current_task(uid)
+async def morning_prompt(context):
+    now = now_utc()
+
+    for user in db.all_users():
+        local = now.astimezone(zone(user["timezone"]))
+        date = local.date().isoformat()
+
+        if quiet(local, user["quiet_start"], user["quiet_end"]):
+            continue
+
+        if not hhmm_after(local, MORNING_TIME):
+            continue
+
+        if db.morning_ping_sent(user["user_id"], date):
+            continue
+
+        c = db.active_commitment(user["user_id"])
+        if c:
             text = (
-                "🌙 Вечерний контроль.\n\n"
-                f"Листок: {s['done']}/{s['total']} решено.\n"
-                f"Учебное время: {s['study_minutes']} мин."
+                f"🌅 У тебя со вчера/раньше висит:\n\n"
+                f"«{c['text']}»\n\n"
+                "Что делаем с этим сегодня?"
             )
-            if t:
-                text += f"\n\nНезакрытая задача: {t['task_no']} — {t['title']}."
-            text += "\n\n/today — сверить план. /study — ещё один блок."
-            if await send(context, chat_id, text):
-                db.mark_notification(uid, date, "evening")
+        else:
+            text = (
+                "🌅 Что тебе сегодня реально надо сделать?\n\n"
+                "Напиши как есть. Я выберу, с чего начать, и потом вернусь "
+                "проверить, сделал ли ты это."
+            )
+
+        if await safe_send(context, user["chat_id"], text):
+            db.mark_morning_ping(user["user_id"], date)
+            db.log_event(user["user_id"], "assistant", "morning", text)
+
 
 async def watchdog(context: ContextTypes.DEFAULT_TYPE):
-    await check_sessions(context)
-    await check_daily(context)
+    await process_reminders(context)
+    await process_sessions(context)
+    await morning_prompt(context)

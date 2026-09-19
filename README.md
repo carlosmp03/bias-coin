@@ -1,53 +1,135 @@
-# bias-coin-bot v2
+# Bias Coin v4 — simple agent
 
-Личный Telegram-диспетчер для работы и теории вероятностей.
+This version intentionally removes the command-heavy interface.
 
-## Механика
+## What the user sees
 
-- `/study` выбирает одну нерешённую задачу.
-- Фокус-блок: 10 / 25 / 45 / 60 минут.
-- После блока бот сам пишет.
-- Если ты не отвечаешь, бот напоминает снова и постепенно уменьшает требование до 10 минут.
-- `/stuck` требует зафиксировать попытку текстом.
-- Утром бот просит план дня; вечером присылает контрольный итог.
-- `/flip` остаётся: 80% ACTION / 20% PAUSE.
+Almost nothing except conversation.
+
+The bot asks:
+
+> Что тебе сегодня реально надо сделать?
+
+The user can answer naturally:
+
+> Теорвер, GRE и ещё код. Я вообще ничего не начал.
+
+Gemini turns the message into one concrete next action. The Python application
+stores that commitment, starts or schedules the work block, and later checks
+back automatically.
+
+## Telegram commands
+
+Only two commands are exposed in the menu:
+
+- `/start` — start/restart the conversation;
+- `/reset` — clear the agent's own conversational context.
+
+Everything else is ordinary text and contextual buttons.
+
+## Core loop
+
+1. User tells the bot what needs to be done.
+2. Agent selects ONE next action.
+3. Bot asks to start now or delay briefly.
+4. When started, bot waits for the focus block to finish.
+5. Bot checks whether it was done.
+6. If the user disappears, the bot nags again:
+   - after ~10 min;
+   - then ~15 min;
+   - then ~20 min;
+   - afterwards about every 2 hours.
+7. Quiet hours stop the nagging at night.
+8. Every morning the bot asks what actually needs to be done today.
+
+The model is called only when the user sends natural-language text. Timers and
+nagging are ordinary Python/SQLite logic, so they do not consume model calls.
+
+## Upgrade from v3
+
+Copy these v4 files over the existing repository.
+
+The old `handlers/` and `data/` directories are no longer used. Delete them
+after copying v4:
+
+Git Bash:
+
+```bash
+rm -rf handlers data
+```
+
+Do NOT delete:
+
+```text
+.git
+.env
+.venv
+```
+
+The existing SQLite database is migrated safely by adding the new v4 tables.
+
+## Install
+
+```bash
+pip install -r requirements.txt
+```
+
+## Local `.env`
+
+```env
+TELEGRAM_BOT_TOKEN=...
+GEMINI_API_KEY=...
+GEMINI_MODEL=gemini-3.8-flash
+DEFAULT_TIMEZONE=Europe/Moscow
+MORNING_TIME=10:00
+QUIET_START=00:30
+QUIET_END=09:00
+```
 
 ## Railway
 
-Variables:
+Keep the Telegram token already configured and add:
 
 ```text
-TELEGRAM_BOT_TOKEN=...
+GEMINI_API_KEY=...
+GEMINI_MODEL=gemini-3.8-flash
 DEFAULT_TIMEZONE=Europe/Moscow
-DEFAULT_MORNING_TIME=09:30
-DEFAULT_EVENING_TIME=22:30
+MORNING_TIME=10:00
+QUIET_START=00:30
+QUIET_END=09:00
+```
+
+For persistent SQLite:
+
+```text
 DB_PATH=/data/bot.db
 ```
 
-Добавь Railway Volume с mount path:
+with a Railway Volume mounted to:
 
 ```text
 /data
 ```
 
-Это важно: иначе SQLite может исчезнуть после redeploy.
-
-Start Command:
+Start command:
 
 ```text
 python bot.py
 ```
 
-После деплоя в Telegram выполни:
+## First test
+
+After Railway redeploys, send:
 
 ```text
-/timezone Europe/Moscow
-/schedule 09:30 22:30
 /start
 ```
 
-Потом тест:
+Then write naturally, for example:
 
 ```text
-/study
+Мне сегодня надо решить две задачи по теорверу и позаниматься GRE.
+До шести я свободен, но начинать вообще не хочется.
 ```
+
+There should be no need to remember `/study`, `/plan`, `/done`, etc.

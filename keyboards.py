@@ -1,51 +1,38 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-def focus_keyboard():
+
+def proposed_keyboard():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("25 мин", callback_data="focus:25"),
-            InlineKeyboardButton("45 мин", callback_data="focus:45"),
-            InlineKeyboardButton("60 мин", callback_data="focus:60"),
+            InlineKeyboardButton("▶️ Начал", callback_data="do:start"),
+            InlineKeyboardButton("⏰ Через 15 мин", callback_data="do:later15"),
         ],
-        [InlineKeyboardButton("10 мин — просто начать", callback_data="focus:10")],
+        [
+            InlineKeyboardButton("✋ Не сегодня", callback_data="do:cancel"),
+        ],
     ])
+
 
 def checkin_keyboard():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("✅ Решил", callback_data="checkin:done"),
-            InlineKeyboardButton("➡️ Есть прогресс", callback_data="checkin:progress"),
+            InlineKeyboardButton("✅ Сделал", callback_data="do:done"),
+            InlineKeyboardButton("➕ Ещё 15 мин", callback_data="do:more15"),
         ],
         [
-            InlineKeyboardButton("🧱 Застрял", callback_data="checkin:stuck"),
-            InlineKeyboardButton("😐 Не занимался", callback_data="checkin:not_worked"),
+            InlineKeyboardButton("😐 Не сделал", callback_data="do:notdone"),
         ],
     ])
 
-def continue_keyboard():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("+15 мин", callback_data="continue:15"),
-            InlineKeyboardButton("+25 мин", callback_data="continue:25"),
-            InlineKeyboardButton("+45 мин", callback_data="continue:45"),
-        ],
-        [InlineKeyboardButton("☕ Пауза 15 мин", callback_data="pause:15")],
-    ])
 
-def minimum_keyboard():
+def nag_keyboard():
     return InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("⚡ 10 минут", callback_data="continue:10"),
-            InlineKeyboardButton("☕ Пауза 15", callback_data="pause:15"),
+            InlineKeyboardButton("⚡ 10 минут сейчас", callback_data="do:start10"),
+            InlineKeyboardButton("⏰ Через 20 мин", callback_data="do:later20"),
         ],
         [
-            InlineKeyboardButton("🧱 Застрял", callback_data="checkin:stuck"),
-            InlineKeyboardButton("✅ Уже решил", callback_data="checkin:done"),
+            InlineKeyboardButton("✅ Уже сделал", callback_data="do:done"),
+            InlineKeyboardButton("✋ Отменить", callback_data="do:cancel"),
         ],
-    ])
-
-def morning_keyboard():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📝 Составить план", callback_data="plan:start")],
-        [InlineKeyboardButton("📚 Сразу теорвер", callback_data="study:start")],
     ])

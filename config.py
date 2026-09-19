@@ -5,20 +5,19 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip()
+
 DB_PATH = Path(os.getenv("DB_PATH", str(BASE_DIR / "bot.db")))
 
 DEFAULT_TIMEZONE = os.getenv("DEFAULT_TIMEZONE", "Europe/Moscow")
-DEFAULT_MORNING_TIME = os.getenv("DEFAULT_MORNING_TIME", "09:30")
-DEFAULT_EVENING_TIME = os.getenv("DEFAULT_EVENING_TIME", "22:30")
-
-REMINDER_DELAYS_MIN = [10, 15, 20, 180]
-
-QUIET_START = os.getenv("QUIET_START", "00:00")
+MORNING_TIME = os.getenv("MORNING_TIME", "10:00")
+QUIET_START = os.getenv("QUIET_START", "00:30")
 QUIET_END = os.getenv("QUIET_END", "09:00")
 
-PROBABILITY_SOURCE = "prob-list4-25f"
-PROBABILITY_SOURCE_URL = (
-    "https://mccme.ru/media/filer_public/92/90/"
-    "929062a6-024d-486c-bb24-3b5b7e7fbf0c/prob-list4-25f.pdf"
-)
+# После того как человек перестал отвечать.
+NAG_DELAYS_MIN = [10, 15, 20, 120]
+
+# Сколько последних событий отдавать модели.
+RECENT_EVENTS_LIMIT = 12
